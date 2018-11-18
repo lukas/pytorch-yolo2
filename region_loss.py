@@ -5,12 +5,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from utils import *
+import wandb
 
 def build_targets(pred_boxes, target, anchors, num_anchors, num_classes, nH, nW, noobject_scale, object_scale, sil_thresh, seen):
     nB = target.size(0)
     nA = num_anchors
     nC = num_classes
-    anchor_step = len(anchors)/num_anchors
+    anchor_step = len(anchors)//num_anchors
     conf_mask  = torch.ones(nB, nA, nH, nW) * noobject_scale
     coord_mask = torch.zeros(nB, nA, nH, nW)
     cls_mask   = torch.zeros(nB, nA, nH, nW)
@@ -23,10 +24,10 @@ def build_targets(pred_boxes, target, anchors, num_anchors, num_classes, nH, nW,
 
     nAnchors = nA*nH*nW
     nPixels  = nH*nW
-    for b in xrange(nB):
+    for b in range(nB):
         cur_pred_boxes = pred_boxes[b*nAnchors:(b+1)*nAnchors].t()
         cur_ious = torch.zeros(nAnchors)
-        for t in xrange(50):
+        for t in range(50):
             if target[b][t*5+1] == 0:
                 break
             gx = target[b][t*5+1]*nW
@@ -35,7 +36,10 @@ def build_targets(pred_boxes, target, anchors, num_anchors, num_classes, nH, nW,
             gh = target[b][t*5+4]*nH
             cur_gt_boxes = torch.FloatTensor([gx,gy,gw,gh]).repeat(nAnchors,1).t()
             cur_ious = torch.max(cur_ious, bbox_ious(cur_pred_boxes, cur_gt_boxes, x1y1x2y2=False))
-        conf_mask[b][cur_ious>sil_thresh] = 0
+
+        #print(torch.reshape(cur_ious>sil_thresh, (nA, nH, nW))
+        conf_mask[b][torch.reshape(cur_ious>sil_thresh, (nA, nH, nW))] = 0
+        #        conf_mask[b][cur_ious>sil_thresh] = 0
     if seen < 12800:
        if anchor_step == 4:
            tx = torch.FloatTensor(anchors).view(nA, anchor_step).index_select(1, torch.LongTensor([2])).view(1,nA,1,1).repeat(nB,1,nH,nW)
@@ -49,8 +53,8 @@ def build_targets(pred_boxes, target, anchors, num_anchors, num_classes, nH, nW,
 
     nGT = 0
     nCorrect = 0
-    for b in xrange(nB):
-        for t in xrange(50):
+    for b in range(nB):
+        for t in range(50):
             if target[b][t*5+1] == 0:
                 break
             nGT = nGT + 1
@@ -64,7 +68,7 @@ def build_targets(pred_boxes, target, anchors, num_anchors, num_classes, nH, nW,
             gw = target[b][t*5+3]*nW
             gh = target[b][t*5+4]*nH
             gt_box = [0, 0, gw, gh]
-            for n in xrange(nA):
+            for n in range(nA):
                 aw = anchors[anchor_step*n]
                 ah = anchors[anchor_step*n+1]
                 anchor_box = [0, 0, aw, ah]
@@ -105,15 +109,17 @@ class RegionLoss(nn.Module):
         self.num_classes = num_classes
         self.anchors = anchors
         self.num_anchors = num_anchors
-        self.anchor_step = len(anchors)/num_anchors
+        self.anchor_step = int(len(anchors)//num_anchors)
         self.coord_scale = 1
         self.noobject_scale = 1
         self.object_scale = 5
         self.class_scale = 1
         self.thresh = 0.6
         self.seen = 0
+        print("AS1", self.anchor_step)
 
     def forward(self, output, target):
+        print("AS2", self.anchor_step)
         #output : BxAs*(4+1+num_classes)*H*W
         t0 = time.time()
         nB = output.data.size(0)
@@ -131,18 +137,23 @@ class RegionLoss(nn.Module):
         cls  = output.index_select(2, Variable(torch.linspace(5,5+nC-1,nC).long().cuda()))
         cls  = cls.view(nB*nA, nC, nH*nW).transpose(1,2).contiguous().view(nB*nA*nH*nW, nC)
         t1 = time.time()
-
         pred_boxes = torch.cuda.FloatTensor(4, nB*nA*nH*nW)
         grid_x = torch.linspace(0, nW-1, nW).repeat(nH,1).repeat(nB*nA, 1, 1).view(nB*nA*nH*nW).cuda()
         grid_y = torch.linspace(0, nH-1, nH).repeat(nW,1).t().repeat(nB*nA, 1, 1).view(nB*nA*nH*nW).cuda()
-        anchor_w = torch.Tensor(self.anchors).view(nA, self.anchor_step).index_select(1, torch.LongTensor([0])).cuda()
-        anchor_h = torch.Tensor(self.anchors).view(nA, self.anchor_step).index_select(1, torch.LongTensor([1])).cuda()
+        anchor_w = torch.Tensor(self.anchors)
+        anchor_w = anchor_w.view(nA, int(self.anchor_step))
+        anchor_w = anchor_w.index_select(1, torch.LongTensor([0])).cuda()
+        anchor_h = torch.Tensor(self.anchors).view(nA, int(self.anchor_step)).index_select(1, torch.LongTensor([1])).cuda()
         anchor_w = anchor_w.repeat(nB, 1).repeat(1, 1, nH*nW).view(nB*nA*nH*nW)
         anchor_h = anchor_h.repeat(nB, 1).repeat(1, 1, nH*nW).view(nB*nA*nH*nW)
-        pred_boxes[0] = x.data + grid_x
-        pred_boxes[1] = y.data + grid_y
-        pred_boxes[2] = torch.exp(w.data) * anchor_w
-        pred_boxes[3] = torch.exp(h.data) * anchor_h
+        # pred_boxes[0] = x.data + grid_x
+        # pred_boxes[1] = y.data + grid_y
+        # pred_boxes[2] = torch.exp(w.data) * anchor_w
+        # pred_boxes[3] = torch.exp(h.data) * anchor_h
+        pred_boxes[0] = torch.reshape(x.data, (1,nB*nA*nH*nW)) + grid_x
+        pred_boxes[1] = torch.reshape(y.data, (1,nB*nA*nH*nW)) + grid_y
+        pred_boxes[2] = torch.reshape(torch.exp(w.data), (1,nB*nA*nH*nW)) * anchor_w
+        pred_boxes[3] = torch.reshape(torch.exp(h.data), (1,nB*nA*nH*nW)) * anchor_h
         pred_boxes = convert2cpu(pred_boxes.transpose(0,1).contiguous().view(-1,4))
         t2 = time.time()
 
@@ -156,7 +167,11 @@ class RegionLoss(nn.Module):
         tw    = Variable(tw.cuda())
         th    = Variable(th.cuda())
         tconf = Variable(tconf.cuda())
-        tcls  = Variable(tcls.view(-1)[cls_mask].long().cuda())
+        # print("mask", cls_mask.size())
+        #print("tcls",tcls.size())
+        #print("3,",tcls.view(-1)[cls_mask])
+        #print("4",tcls.view(-1)[cls_mask].long())
+        tcls  = Variable(tcls[cls_mask].long().cuda())
 
         coord_mask = Variable(coord_mask.cuda())
         conf_mask  = Variable(conf_mask.cuda().sqrt())
@@ -180,5 +195,6 @@ class RegionLoss(nn.Module):
             print('     build targets : %f' % (t3 - t2))
             print('       create loss : %f' % (t4 - t3))
             print('             total : %f' % (t4 - t0))
+        wandb.log({"nGT:": nGT, "loss_x": loss_x.data[0], "loss_y": loss_y.data[0], "loss_w":loss_w.data[0], "loss_h": loss_h.data[0]}) 
         print('%d: nGT %d, recall %d, proposals %d, loss: x %f, y %f, w %f, h %f, conf %f, cls %f, total %f' % (self.seen, nGT, nCorrect, nProposals, loss_x.data[0], loss_y.data[0], loss_w.data[0], loss_h.data[0], loss_conf.data[0], loss_cls.data[0], loss.data[0]))
         return loss

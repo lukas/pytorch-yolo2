@@ -20,6 +20,7 @@ def softmax(x):
 
 
 def bbox_iou(box1, box2, x1y1x2y2=True):
+    
     if x1y1x2y2:
         mx = min(box1[0], box2[0])
         Mx = max(box1[2], box2[2])
@@ -30,10 +31,13 @@ def bbox_iou(box1, box2, x1y1x2y2=True):
         w2 = box2[2] - box2[0]
         h2 = box2[3] - box2[1]
     else:
-        mx = min(box1[0]-box1[2]/2.0, box2[0]-box2[2]/2.0)
-        Mx = max(box1[0]+box1[2]/2.0, box2[0]+box2[2]/2.0)
-        my = min(box1[1]-box1[3]/2.0, box2[1]-box2[3]/2.0)
-        My = max(box1[1]+box1[3]/2.0, box2[1]+box2[3]/2.0)
+        two = torch.FloatTensor([2.0])
+        box1 = torch.FloatTensor(box1)
+        box2 = torch.FloatTensor(box2)
+        mx = min(box1[0]-box1[2]//two, box2[0]-box2[2]//two)
+        Mx = max(box1[0]+box1[2]//two, box2[0]+box2[2]//two)
+        my = min(box1[1]-box1[3]//two, box2[1]-box2[3]//two)
+        My = max(box1[1]+box1[3]//two, box2[1]+box2[3]//two)
         w1 = box1[2]
         h1 = box1[3]
         w2 = box2[2]
@@ -111,7 +115,7 @@ def convert2cpu_long(gpu_matrix):
     return torch.LongTensor(gpu_matrix.size()).copy_(gpu_matrix)
 
 def get_region_boxes(output, conf_thresh, num_classes, anchors, num_anchors, only_objectness=1, validation=False):
-    anchor_step = len(anchors)/num_anchors
+    anchor_step = len(anchors)//num_anchors
     if output.dim() == 3:
         output = output.unsqueeze(0)
     batch = output.size(0)
@@ -393,7 +397,7 @@ def file_lines(thefilepath):
         buffer = thefile.read(8192*1024)
         if not buffer:
             break
-        count += buffer.count('\n')
+        count += buffer.count('\n'.encode())
     thefile.close( )
     return count
 

@@ -50,7 +50,7 @@ class FocalLoss(nn.Module):
         class_mask = inputs.data.new(N, C).fill_(0)
         class_mask = Variable(class_mask)
         ids = targets.view(-1, 1)
-        class_mask.scatter_(1, ids.data, 1.)
+        class_mask.scatter_(1, ids, 1.)
         #print(class_mask)
         
 

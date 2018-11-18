@@ -23,7 +23,7 @@ from cfg import parse_cfg
 from region_loss import RegionLoss
 from darknet import Darknet
 from models.tiny_yolo import TinyYoloNet
-
+import wandb
 
 # Training settings
 datacfg       = sys.argv[1]
@@ -64,6 +64,10 @@ iou_thresh    = 0.5
 
 if not os.path.exists(backupdir):
     os.mkdir(backupdir)
+
+wandb.init()
+wandb.config.update(net_options)
+wandb.config.update(data_options)
     
 ###############
 torch.manual_seed(seed)
@@ -76,13 +80,14 @@ region_loss = model.loss
 
 model.load_weights(weightfile)
 model.print_network()
+wandb.hook_torch(model)
 
 region_loss.seen  = model.seen
-processed_batches = model.seen/batch_size
+processed_batches = model.seen//batch_size
 
 init_width        = model.width
 init_height       = model.height
-init_epoch        = model.seen/nsamples 
+init_epoch        = model.seen//nsamples 
 
 kwargs = {'num_workers': num_workers, 'pin_memory': True} if use_cuda else {}
 test_loader = torch.utils.data.DataLoader(
@@ -153,10 +158,14 @@ def train(epoch):
         processed_batches = processed_batches + 1
         #if (batch_idx+1) % dot_interval == 0:
         #    sys.stdout.write('.')
+        target = target.type(torch.FloatTensor)
 
         if use_cuda:
             data = data.cuda()
-            #target= target.cuda()
+            target= target.cuda()
+            
+        print("Data: ", data.type())
+        print("Target: ", target.type())
         t3 = time.time()
         data, target = Variable(data), Variable(target)
         t4 = time.time()
@@ -252,12 +261,13 @@ def test(epoch):
     recall = 1.0*correct/(total+eps)
     fscore = 2.0*precision*recall/(precision+recall+eps)
     logging("precision: %f, recall: %f, fscore: %f" % (precision, recall, fscore))
-
+    wandb.log({"precision":1.0*correct/(proposals+eps),"recall":1.0*correct/(total+eps),"fscore":2.0*precision*recall/(precision+recall+eps)})
+    
 evaluate = False
 if evaluate:
     logging('evaluating ...')
     test(0)
 else:
-    for epoch in range(init_epoch, max_epochs): 
+    for epoch in range(int(init_epoch), int(max_epochs)): 
         train(epoch)
         test(epoch)
